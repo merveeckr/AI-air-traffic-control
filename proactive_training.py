@@ -69,13 +69,13 @@ class ProactiveNavigationTrainer:
             seed=self.config['seed'] + 1000
         )
         
-        print(f" {self.config['n_envs']} paralel ortam kuruldu")
-        print(f" Observation Space: {self.env.observation_space}")
-        print(f" Action Space: {self.env.action_space}")
+        print(f"✅ {self.config['n_envs']} paralel ortam kuruldu")
+        print(f"📊 Observation Space: {self.env.observation_space}")
+        print(f"🎯 Action Space: {self.env.action_space}")
     
     def setup_model(self):
         """PPO modelini kur"""
-        print(" Proaktif Navigation PPO Model kuruluyor...")
+        print("🧠 Proaktif Navigation PPO Model kuruluyor...")
         
         # Policy network - Waypoint tahmini için optimize edilmiş
         policy_kwargs = {
@@ -108,12 +108,12 @@ class ProactiveNavigationTrainer:
             tensorboard_log=f"{self.training_dir}/tensorboard_logs"
         )
         
-        print(" Proaktif Navigation PPO Model kuruldu")
-        print(f" Model parametreleri: {sum(p.numel() for p in self.model.policy.parameters()):,}")
+        print("✅ Proaktif Navigation PPO Model kuruldu")
+        print(f"📊 Model parametreleri: {sum(p.numel() for p in self.model.policy.parameters()):,}")
     
     def setup_callbacks(self):
         """Callback'leri kur"""
-        print(" Callback'ler kuruluyor...")
+        print("📞 Callback'ler kuruluyor...")
         
         # Checkpoint callback
         checkpoint_callback = CheckpointCallback(
@@ -134,15 +134,15 @@ class ProactiveNavigationTrainer:
         )
         
         self.callbacks = [checkpoint_callback, eval_callback]
-        print(" Callback'ler kuruldu")
+        print("✅ Callback'ler kuruldu")
     
     def train(self):
         """Modeli eğit"""
-        print(" Proaktif Navigation PPO Eğitimi başlatılıyor...")
-        print(f"  Toplam adım: {self.config['total_timesteps']:,}")
-        print(f" Paralel ortam: {self.config['n_envs']}")
-        print(f" Learning Rate: {self.config['learning_rate']}")
-        print(f" Batch Size: {self.config['batch_size']}")
+        print("🚀 Proaktif Navigation PPO Eğitimi başlatılıyor...")
+        print(f"⏱️  Toplam adım: {self.config['total_timesteps']:,}")
+        print(f"🔄 Paralel ortam: {self.config['n_envs']}")
+        print(f"📚 Learning Rate: {self.config['learning_rate']}")
+        print(f"🎯 Batch Size: {self.config['batch_size']}")
         
         try:
             # Eğitimi başlat
@@ -155,18 +155,18 @@ class ProactiveNavigationTrainer:
             # Final modeli kaydet
             final_model_path = f"{self.training_dir}/final_model"
             self.model.save(final_model_path)
-            print(f" Final model kaydedildi: {final_model_path}")
+            print(f"💾 Final model kaydedildi: {final_model_path}")
             
         except Exception as e:
-            print(f" Eğitim hatası: {e}")
+            print(f"❌ Eğitim hatası: {e}")
             raise
     
     def evaluate_model(self, num_episodes=20):
         """Eğitilmiş modeli değerlendir"""
-        print(f" Proaktif Navigation Model değerlendiriliyor ({num_episodes} episode)...")
+        print(f"🔍 Proaktif Navigation Model değerlendiriliyor ({num_episodes} episode)...")
         
         if self.model is None:
-            print(" Model bulunamadı!")
+            print("❌ Model bulunamadı!")
             return
         
         # Değerlendirme ortamı
@@ -230,7 +230,7 @@ class ProactiveNavigationTrainer:
         eval_env.close()
         
         # Sonuçları yazdır
-        print("\n Proaktif Navigation Değerlendirme Sonuçları:")
+        print("\n📊 Proaktif Navigation Değerlendirme Sonuçları:")
         print(f"   Başarı Oranı: {success_count/num_episodes*100:.1f}%")
         print(f"   Çarpışma Oranı: {collision_count/num_episodes*100:.1f}%")
         print(f"   Sınır Dışı Oranı: {out_of_bounds_count/num_episodes*100:.1f}%")
@@ -254,7 +254,7 @@ class ProactiveNavigationTrainer:
         config_path = f"{self.training_dir}/training_config.json"
         with open(config_path, 'w') as f:
             json.dump(self.config, f, indent=2)
-        print(f" Konfigürasyon kaydedildi: {config_path}")
+        print(f"📋 Konfigürasyon kaydedildi: {config_path}")
     
     def load_model(self):
         """Eğitilmiş modeli yükle"""
@@ -280,7 +280,7 @@ class ProactiveNavigationTrainer:
     
     def train_model(self):
         """Modeli eğit ve döndür"""
-        print(" Model eğitimi başlatılıyor...")
+        print("🚀 Model eğitimi başlatılıyor...")
         
         # Ortamı kur
         self.setup_environment()
@@ -297,28 +297,28 @@ class ProactiveNavigationTrainer:
         # Eğitimi başlat
         self.train()
         
-        print(" Model eğitimi tamamlandı!")
+        print("✅ Model eğitimi tamamlandı!")
         return self.model
     
     def plot_training_results(self):
         """Eğitim sonuçlarını görselleştir"""
-        print(" Eğitim sonuçları görselleştiriliyor...")
+        print("📈 Eğitim sonuçları görselleştiriliyor...")
         
         try:
             log_dir = f"{self.training_dir}/tensorboard_logs"
             if os.path.exists(log_dir):
                 plot_results([log_dir], self.config['total_timesteps'], 'timesteps')
                 plt.savefig(f"{self.training_dir}/training_results.png", dpi=300, bbox_inches='tight')
-                print(f" Eğitim grafiği kaydedildi: {self.training_dir}/training_results.png")
+                print(f"📊 Eğitim grafiği kaydedildi: {self.training_dir}/training_results.png")
                 plt.show()
             else:
-                print("  Tensorboard log'ları bulunamadı")
+                print("⚠️  Tensorboard log'ları bulunamadı")
         except Exception as e:
-            print(f"  Grafik oluşturma hatası: {e}")
+            print(f"⚠️  Grafik oluşturma hatası: {e}")
     
     def run_complete_training(self):
         """Tam eğitim sürecini çalıştır"""
-        print(" Proaktif Aircraft Navigation Eğitim Süreci Başlatılıyor...")
+        print("🚀 Proaktif Aircraft Navigation Eğitim Süreci Başlatılıyor...")
         print("=" * 70)
         
         try:
@@ -344,10 +344,10 @@ class ProactiveNavigationTrainer:
             print("\n" + "=" * 70)
             self.evaluate_model(num_episodes=20)
             
-            print("\n Proaktif Navigation eğitim süreci başarıyla tamamlandı!")
+            print("\n🎉 Proaktif Navigation eğitim süreci başarıyla tamamlandı!")
             
         except Exception as e:
-            print(f"\n Eğitim sürecinde hata: {e}")
+            print(f"\n❌ Eğitim sürecinde hata: {e}")
             raise
         finally:
             # Ortamları kapat
@@ -358,7 +358,7 @@ class ProactiveNavigationTrainer:
 
 def main():
     """Ana fonksiyon"""
-    print(" Proaktif Aircraft Navigation Training System")
+    print("🚀 Proaktif Aircraft Navigation Training System")
     print("=" * 70)
     
     # Eğitimi başlat
