@@ -96,7 +96,7 @@ python opensky_demo.py
 - İnternet bağlantısını kontrol et
 - Farklı bölge dene
 
-## 📚 **Kaynaklar**
+##  **Kaynaklar**
 
 - [OpenSky Network API](https://opensky-network.org/apidocs/)
 - [API Dokümantasyonu](https://opensky-network.org/apidocs/)
