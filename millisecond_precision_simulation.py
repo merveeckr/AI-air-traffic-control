@@ -105,8 +105,8 @@ class MillisecondPrecisionSimulation:
         return PPO.load(model_path)
     
     def create_cluster_scenario(self):
-        """Kümelerin yanına yavaş yaklaşma senaryosu"""
-        print("🎯 Yavaş Yaklaşma Senaryosu Oluşturuluyor...")
+        """Cluster'ın arkasında hedef ile manevra senaryosu"""
+        print("🎯 Cluster Arkasında Hedef + Manevra Senaryosu Oluşturuluyor...")
         
         # Environment'ı reset et
         obs, info = self.env.reset()
@@ -116,47 +116,55 @@ class MillisecondPrecisionSimulation:
         self.env.goal_radius = 50.0  # Daha büyük hedef
         self.env.safe_margin = 20.0  # Daha büyük güvenlik mesafesi
         
-        # Manuel olarak kümeleri stratejik yerleştir - Daha yakın
+        # Manuel olarak kümeleri stratejik yerleştir - Hedef yolunda engel oluşturacak
         self.env.clusters = []
         
-        # Küme 1: Hedef yolunda, yakın
+        # Küme 1: Başlangıç-hedef yolu üzerinde, büyük engel
         cluster1 = {
-            'cx': 20.0,  # Hedef yolunda, daha yakın
-            'cy': 12.0,
-            'r': 5.0,    # Orta boy küme
-            'risk': 0.6,  # Orta risk
-            'id': 1,
-            'approach_time': 6.0  # 6 saniye sonra yaklaşacak
-        }
-        
-        # Küme 2: Başlangıç yolunda, çok yakın
-        cluster2 = {
-            'cx': 8.0,   # Başlangıç yolunda, çok yakın
-            'cy': 5.0,
-            'r': 4.0,    # Küçük küme
-            'risk': 0.4,  # Düşük risk
-            'id': 2,
-            'approach_time': 2.0  # 2 saniye sonra yaklaşacak
-        }
-        
-        # Küme 3: Hedefin yanında, orta mesafe
-        cluster3 = {
-            'cx': 35.0,  # Hedefin yanında, orta mesafe
-            'cy': 28.0,
-            'r': 6.0,    # Büyük küme
+            'cx': 25.0,  # Yol üzerinde
+            'cy': 15.0,
+            'r': 12.0,   # Büyük küme
             'risk': 0.8,  # Yüksek risk
-            'id': 3,
-            'approach_time': 10.0  # 10 saniye sonra yaklaşacak
+            'id': 1
+        }
+        
+        # Küme 2: Yol üzerinde, orta engel
+        cluster2 = {
+            'cx': 45.0,  # Yol üzerinde
+            'cy': 25.0,
+            'r': 10.0,   # Orta boy küme
+            'risk': 0.7,  # Orta risk
+            'id': 2
+        }
+        
+        # Küme 3: Yol üzerinde, küçük engel
+        cluster3 = {
+            'cx': 65.0,  # Yol üzerinde
+            'cy': 35.0,
+            'r': 8.0,    # Küçük küme
+            'risk': 0.6,  # Orta risk
+            'id': 3
         }
         
         self.env.clusters = [cluster1, cluster2, cluster3]
         
-        print("✅ Yavaş yaklaşma senaryosu oluşturuldu:")
+        # Hedefi cluster'ın arkasına yerleştir
+        largest_cluster = max(self.env.clusters, key=lambda c: c['r'])
+        angle = np.pi / 4  # 45 derece
+        distance = largest_cluster['r'] + 30  # Güvenli mesafe
+        
+        self.env.goal = np.array([
+            largest_cluster['cx'] + distance * np.cos(angle),
+            largest_cluster['cy'] + distance * np.sin(angle)
+        ])
+        
+        print("✅ Cluster arkasında hedef + manevra senaryosu oluşturuldu:")
         print(f"   Environment Max Steps: {self.env.max_steps}")
         print(f"   Environment Goal Radius: {self.env.goal_radius}")
         print(f"   Environment Safe Margin: {self.env.safe_margin}")
+        print(f"   Hedef: ({self.env.goal[0]:.1f}, {self.env.goal[1]:.1f})")
         for cluster in self.env.clusters:
-            print(f"   Küme {cluster['id']}: ({cluster['cx']:.1f}, {cluster['cy']:.1f}) - Risk: {cluster['risk']:.1f} - Yaklaşma: {cluster['approach_time']:.1f}s")
+            print(f"   Küme {cluster['id']}: ({cluster['cx']:.1f}, {cluster['cy']:.1f}) - Risk: {cluster['risk']:.1f} - Yarıçap: {cluster['r']:.1f}")
         
         return obs, info
     
@@ -407,6 +415,26 @@ class MillisecondPrecisionSimulation:
             self.ax.scatter(x, y, c='yellow', s=100, marker='o', alpha=0.7, 
                            label=f"Manevra {maneuver['cluster_id']}" if maneuver == recent_maneuvers[0] else "")
         
+        # Manevra hedefi göster
+        if hasattr(self.env, '_is_maneuver_needed') and self.env._is_maneuver_needed():
+            maneuver_target = self.env._get_maneuver_target()
+            if maneuver_target != (self.env.goal[0], self.env.goal[1]):
+                self.ax.scatter(maneuver_target[0], maneuver_target[1], c='orange', s=200, marker='s', 
+                               label='Manevra Hedefi', alpha=0.8, zorder=4)
+                
+                # Manevra rotası çiz
+                self.ax.plot([self.env.x, maneuver_target[0]], [self.env.y, maneuver_target[1]], 
+                           'orange', linestyle='--', linewidth=2, alpha=0.6)
+        
+        # Engel tespiti göster
+        if hasattr(self.env, '_detect_cluster_obstacles'):
+            obstacles = self.env._detect_cluster_obstacles()
+            for obstacle in obstacles:
+                # Engel yolunu kırmızı çizgi ile göster
+                self.ax.plot([0, self.env.goal[0]], [0, self.env.goal[1]], 
+                           'red', linestyle=':', linewidth=3, alpha=0.4, label='Engel Yolu')
+                break  # Sadece bir kez çiz
+        
         # Harita ayarları
         self.ax.set_xlim(self.env.world_bounds['x_min'], self.env.world_bounds['x_max'])
         self.ax.set_ylim(self.env.world_bounds['y_min'], self.env.world_bounds['y_max'])
@@ -414,7 +442,7 @@ class MillisecondPrecisionSimulation:
         self.ax.set_ylabel('Y Koordinatı (m)', fontsize=12)
         
         # Başlık ve bilgiler
-        title = f'Milisaniye Hassasiyetinde Proaktif Navigation - Zaman: {self.current_time:.1f}s - Adım: {step}'
+        title = f'Cluster Arkasında Hedef + Manevra Simülasyonu - Zaman: {self.current_time:.1f}s - Adım: {step}'
         self.ax.set_title(title, fontsize=14, fontweight='bold')
         
         # Zaman bilgisi
@@ -431,6 +459,27 @@ class MillisecondPrecisionSimulation:
                         fontsize=10, verticalalignment='top',
                         bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
         
+        # Manevra durumu
+        if hasattr(self.env, '_is_maneuver_needed'):
+            if self.env._is_maneuver_needed():
+                maneuver_status = "Manevra Gerekli"
+                maneuver_color = "orange"
+                if hasattr(self.env, '_get_maneuver_target'):
+                    maneuver_target = self.env._get_maneuver_target()
+                    if maneuver_target != (self.env.goal[0], self.env.goal[1]):
+                        target_text = f'Manevra Hedefi: ({maneuver_target[0]:.1f}, {maneuver_target[1]:.1f})'
+                        self.ax.text(0.02, 0.78, target_text, transform=self.ax.transAxes, 
+                                    fontsize=10, verticalalignment='top',
+                                    bbox=dict(boxstyle='round', facecolor='orange', alpha=0.7))
+            else:
+                maneuver_status = "Direkt Hedef"
+                maneuver_color = "lightgreen"
+            
+            status_text = f'Durum: {maneuver_status}'
+            self.ax.text(0.02, 0.74, status_text, transform=self.ax.transAxes, 
+                        fontsize=10, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor=maneuver_color, alpha=0.7))
+        
         # Hedef mesafesi
         goal_dist = self.env._goal_dist()
         dist_text = f'Goal Distance: {goal_dist:.1f}m'
@@ -440,7 +489,7 @@ class MillisecondPrecisionSimulation:
         
         # Adım bilgisi
         step_text = f'Adım: {step}/200'
-        self.ax.text(0.02, 0.80, step_text, transform=self.ax.transAxes, 
+        self.ax.text(0.02, 0.68, step_text, transform=self.ax.transAxes, 
                     fontsize=10, verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.7))
         
@@ -457,12 +506,13 @@ class MillisecondPrecisionSimulation:
 
 def main():
     """Ana fonksiyon"""
-    print("🚁 Milisaniye Hassasiyetinde Proaktif Navigation Simülasyonu")
+    print("🚁 Cluster Arkasında Hedef + Manevra Simülasyonu")
     print("=" * 70)
     print("🎯 Özellikler:")
-    print("   • Milisaniye hassasiyetinde simülasyon")
-    print("   • Yavaş yavaş kümelerin yanına yaklaşma")
-    print("   • 3 saniye önceden manevra tahmini")
+    print("   • Hedef cluster'ın arkasında yerleştirildi")
+    print("   • Cluster tespiti ve manevra planlama")
+    print("   • Güvenli rota hesaplama")
+    print("   • Manevra ödüllendirme sistemi")
     print("   • Gerçek zamanlı görselleştirme")
     print("   • Manevra geçmişi takibi")
     print("=" * 70)
