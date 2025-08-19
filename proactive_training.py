@@ -24,21 +24,21 @@ class ProactiveNavigationTrainer:
     def __init__(self):
         """Eğitim konfigürasyonu"""
         self.config = {
-            'total_timesteps': 500_000,    # 500K adım (daha kısa eğitim)
-            'learning_rate': 3e-4,          # Yüksek learning rate
-            'n_steps': 1024,                # Küçük batch
-            'batch_size': 64,               # Küçük batch size
-            'n_epochs': 8,                  # Az epoch
-            'gamma': 0.99,                  # Discount factor
-            'gae_lambda': 0.95,             # GAE lambda
-            'clip_range': 0.2,              # PPO clip range
-            'ent_coef': 0.01,               # Yüksek entropy (exploration)
-            'vf_coef': 0.5,                 # Value function coefficient
-            'max_grad_norm': 0.5,           # Gradient clipping
-            'n_envs': 8,                    # Paralel ortam sayısı
-            'eval_freq': 10000,             # Sık değerlendirme
-            'save_freq': 50000,             # Kaydetme sıklığı
-            'eval_episodes': 10,            # Değerlendirme episode sayısı
+            'total_timesteps': 500_000,
+            'learning_rate': 1e-4,
+            'n_steps': 2048,
+            'batch_size': 256,
+            'n_epochs': 10,
+            'gamma': 0.995,
+            'gae_lambda': 0.98,
+            'clip_range': 0.2,
+            'ent_coef': 0.02,
+            'vf_coef': 0.5,
+            'max_grad_norm': 0.3,
+            'n_envs': 16,
+            'eval_freq': 10000,
+            'save_freq': 100000,
+            'eval_episodes': 20,
             'seed': 42
         }
         
@@ -77,12 +77,12 @@ class ProactiveNavigationTrainer:
         """PPO modelini kur"""
         print("🧠 Proaktif Navigation PPO Model kuruluyor...")
         
-        # Policy network - Waypoint tahmini için optimize edilmiş
+        # Policy network - Yüksek başarı oranı için optimize edilmiş
         policy_kwargs = {
             'net_arch': [
                 dict(
-                    pi=[256, 256, 128],      # Policy network
-                    vf=[256, 256, 128]       # Value network
+                    pi=[1024, 1024, 512, 256, 128],  # Daha da derin policy network
+                    vf=[1024, 1024, 512, 256, 128]   # Daha da derin value network
                 )
             ],
             'activation_fn': torch.nn.ReLU,
@@ -137,26 +137,28 @@ class ProactiveNavigationTrainer:
         print("✅ Callback'ler kuruldu")
     
     def train(self):
-        """Modeli eğit"""
-        print("🚀 Proaktif Navigation PPO Eğitimi başlatılıyor...")
+        """Modeli eğit - curriculum ile"""
+        print("🚀 Proaktif Navigation PPO Eğitimi (curriculum) başlatılıyor...")
         print(f"⏱️  Toplam adım: {self.config['total_timesteps']:,}")
-        print(f"🔄 Paralel ortam: {self.config['n_envs']}")
-        print(f"📚 Learning Rate: {self.config['learning_rate']}")
-        print(f"🎯 Batch Size: {self.config['batch_size']}")
-        
         try:
-            # Eğitimi başlat
-            self.model.learn(
-                total_timesteps=self.config['total_timesteps'],
-                callback=self.callbacks,
-                progress_bar=True
-            )
-            
+            # Phase 1: kolay (1 cluster)
+            print("📘 Curriculum Phase 1: 1 cluster, goal_radius=60, max_steps=300")
+            self.env.env_method('set_curriculum', goal_radius=60, max_steps=300, curriculum_num_clusters=1)
+            self.model.learn(total_timesteps=100_000, callback=self.callbacks, progress_bar=True)
+            # Phase 2: orta (2 cluster)
+            print("📙 Curriculum Phase 2: 2 cluster, goal_radius=45, max_steps=400")
+            self.env.env_method('set_curriculum', goal_radius=45, max_steps=400, curriculum_num_clusters=2)
+            self.model.learn(total_timesteps=200_000, callback=self.callbacks, progress_bar=True)
+            # Phase 3: zor (2-3 cluster)
+            print("📕 Curriculum Phase 3: 2-3 cluster, goal_radius=40, max_steps=500")
+            self.env.env_method('set_curriculum', goal_radius=40, max_steps=500, curriculum_num_clusters=0)
+            remaining = max(0, self.config['total_timesteps'] - 300_000)
+            if remaining > 0:
+                self.model.learn(total_timesteps=remaining, callback=self.callbacks, progress_bar=True)
             # Final modeli kaydet
             final_model_path = f"{self.training_dir}/final_model"
             self.model.save(final_model_path)
             print(f"💾 Final model kaydedildi: {final_model_path}")
-            
         except Exception as e:
             print(f"❌ Eğitim hatası: {e}")
             raise

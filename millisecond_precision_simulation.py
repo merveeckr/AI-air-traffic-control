@@ -30,9 +30,9 @@ class MillisecondPrecisionSimulation:
             self.model = self.trainer.train_model()
         
         # Milisaniye hassasiyet ayarları - Daha yavaş ve görünür
-        self.dt = 0.1  # 0.1 saniye (daha görünür)
-        self.simulation_speed = 0.5  # 0.5x hız (daha yavaş)
-        self.visualization_fps = 10  # 10 FPS (daha yavaş görselleştirme)
+        self.dt = 0.2  # 0.2 saniye (daha görünür)
+        self.simulation_speed = 2  # 0.1x hız (çok daha yavaş)
+        self.visualization_fps = 5   # 5 FPS (çok daha yavaş görselleştirme)
         
         # Görselleştirme ayarları
         self.fig, self.ax = plt.subplots(figsize=(16, 12))
@@ -53,7 +53,7 @@ class MillisecondPrecisionSimulation:
         from stable_baselines3 import PPO
         
         # Eğitim dizinlerini bul
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_dir = os.path.dirname(os.path.abspath(__file__))  # Mevcut dizin
         training_dirs = []
         
         for item in os.listdir(base_dir):
@@ -94,9 +94,45 @@ class MillisecondPrecisionSimulation:
         if not valid_dirs:
             raise FileNotFoundError("Hiçbir eğitim dizininde model dosyası bulunamadı")
         
-        # En son geçerli dizini seç
-        latest_valid_dir = max(valid_dirs, key=lambda x: x[0])
+        # En son geçerli dizini seç - Tarih bazlı sıralama
+        # Dizin adlarındaki tarih formatını parse et: proactive_navigation_training_YYYYMMDD_HHMMSS
+        def parse_timestamp(dir_name):
+            timestamp = dir_name.replace('proactive_navigation_training_', '')
+        # YYYYMMDD_HHMMSS formatını datetime'a çevir
+            try:
+                return datetime.strptime(timestamp, '%Y%m%d_%H%M%S')
+            except:
+                return datetime.min
+    
+        # En son eğitimi bul
+        latest_dir = max(training_dirs, key=parse_timestamp)
+        print(f"🔍 En son eğitim: {latest_dir}")
+        
+        # En son eğitilen modeli bul - latest_dir'ı kullan
+        print(f"🔍 Aranan latest_dir: {latest_dir}")
+        print(f"🔍 Mevcut valid_dirs:")
+        for vd in valid_dirs:
+            print(f"   - {vd[0]} (model: {vd[1]})")
+        
+        latest_valid_dir = None
+        for valid_dir in valid_dirs:
+            print(f"🔍 Kontrol: {valid_dir[0]} == {latest_dir} ? {valid_dir[0] == latest_dir}")
+            if valid_dir[0] == latest_dir:
+                latest_valid_dir = valid_dir
+                print(f"✅ Eşleşme bulundu: {valid_dir}")
+                break
+        
+        if latest_valid_dir is None:
+            print(f"⚠️  latest_dir'da model bulunamadı, fallback kullanılıyor")
+            # Eğer latest_dir'da model yoksa, en son valid_dir'ı kullan
+            latest_valid_dir = max(valid_dirs, key=lambda x: parse_timestamp(x[0]))
+        
         dir_name, model_file, model_path = latest_valid_dir
+        
+        print(f"🔍 Tarih sıralaması:")
+        for valid_dir in sorted(valid_dirs, key=lambda x: parse_timestamp(x[0])):
+            print(f"   {parse_timestamp(valid_dir[0])} -> {valid_dir[0]}")
+        print(f"   En son seçilen: {parse_timestamp(dir_name)} -> {dir_name}")
         
         print(f"📁 Model bulundu: {dir_name}")
         print(f"📥 Model dosyası: {model_file}")
@@ -108,54 +144,36 @@ class MillisecondPrecisionSimulation:
         """Cluster'ın arkasında hedef ile manevra senaryosu"""
         print("🎯 Cluster Arkasında Hedef + Manevra Senaryosu Oluşturuluyor...")
         
-        # Environment'ı reset et
-        obs, info = self.env.reset()
+        # Environment'ı reset etme - zaten yukarıda reset ediliyor
+        # obs, info = self.env.reset()
         
-        # Environment parametrelerini ayarla - Daha uzun simülasyon için
-        self.env.max_steps = 500  # Çok daha uzun
-        self.env.goal_radius = 50.0  # Daha büyük hedef
-        self.env.safe_margin = 20.0  # Daha büyük güvenlik mesafesi
+        # Environment parametrelerini ayarla - Optimize edilmiş
+        self.env.max_steps = 1000  # Uzun uçuş
+        self.env.goal_radius = 25.0   # Büyük hedef (15.0'dan 25.0'a) - daha kolay başarı
+        self.env.safe_margin = 30.0  # Küçük güvenlik mesafesi (45.0'dan 30.0'a) - daha az dönüş
         
-        # Manuel olarak kümeleri stratejik yerleştir - Hedef yolunda engel oluşturacak
+        # TEK CLUSTER TEST - Basit senaryo
         self.env.clusters = []
         
-        # Küme 1: Başlangıç-hedef yolu üzerinde, büyük engel
+        # Tek küme: Yol üzerinde ama geçilebilir
         cluster1 = {
-            'cx': 25.0,  # Yol üzerinde
-            'cy': 15.0,
-            'r': 12.0,   # Büyük küme
-            'risk': 0.8,  # Yüksek risk
+            'cx': 35.0,  # Yol üzerinde ama daha uzağa
+            'cy': 25.0,
+            'r': 3.0,    # Makul boyut
+            'risk': 0.4,  # Düşük risk
             'id': 1
         }
         
-        # Küme 2: Yol üzerinde, orta engel
-        cluster2 = {
-            'cx': 45.0,  # Yol üzerinde
-            'cy': 25.0,
-            'r': 10.0,   # Orta boy küme
-            'risk': 0.7,  # Orta risk
-            'id': 2
-        }
+        self.env.clusters = [cluster1]  # SADECE 1 CLUSTER!
         
-        # Küme 3: Yol üzerinde, küçük engel
-        cluster3 = {
-            'cx': 65.0,  # Yol üzerinde
-            'cy': 35.0,
-            'r': 8.0,    # Küçük küme
-            'risk': 0.6,  # Orta risk
-            'id': 3
-        }
-        
-        self.env.clusters = [cluster1, cluster2, cluster3]
-        
-        # Hedefi cluster'ın arkasına yerleştir
-        largest_cluster = max(self.env.clusters, key=lambda c: c['r'])
+        # Hedefi cluster'ın arkasına yerleştir - Basit hesaplama
+        cluster = self.env.clusters[0]  # Tek cluster
         angle = np.pi / 4  # 45 derece
-        distance = largest_cluster['r'] + 30  # Güvenli mesafe
+        distance = cluster['r'] + 25  # Güvenli mesafe
         
         self.env.goal = np.array([
-            largest_cluster['cx'] + distance * np.cos(angle),
-            largest_cluster['cy'] + distance * np.sin(angle)
+            cluster['cx'] + distance * np.cos(angle),
+            cluster['cy'] + distance * np.sin(angle)
         ])
         
         print("✅ Cluster arkasında hedef + manevra senaryosu oluşturuldu:")
@@ -186,9 +204,9 @@ class MillisecondPrecisionSimulation:
         return approach_time
     
     def predict_maneuver_need(self, cluster):
-        """1 saniye önceden manevra ihtiyacını tahmin et"""
+        """1.5 saniye önceden manevra ihtiyacını tahmin et"""
         approach_time = self.calculate_cluster_approach_time(cluster)
-        return approach_time <= 0.5  # 1 saniye veya daha az
+        return approach_time <= 1.5  # 1.5 saniye veya daha az - daha erken manevra
     
     def run_millisecond_simulation(self):
         """Milisaniye hassasiyetinde simülasyon"""
@@ -200,21 +218,63 @@ class MillisecondPrecisionSimulation:
         self.episode_start_time = time.time()
         self.current_time = 0.0
         
-        obs, info = self.create_cluster_scenario()
+        # obs, info = self.create_cluster_scenario()  # Environment zaten reset edildi
         total_reward = 0
         step_count = 0
         
         # Simülasyon döngüsü - Daha uzun süre çalışsın
-        max_steps = 200  # En az 200 adım çalışsın
+        max_steps = 500  # En az 500 adım çalışsın (200'den 500'e)
         
         # Environment'ı manuel olarak kontrol et
         self.env.max_steps = max_steps  # Maksimum adım sayısını artır
-        self.env.goal_radius = 50.0     # Hedef yarıçapını artır (daha kolay ulaşsın)
+        self.env.goal_radius = 25.0     # Hedef yarıçapını büyüt (15.0'dan 25.0'a) - daha kolay başarı
+        self.env.safe_margin = 30.0     # Güvenlik mesafesini küçült (45.0'dan 30.0'a) - daha az dönüş
+        
+        # Environment parametrelerini doğrudan override et
+        print(f"🔧 Environment parametreleri override ediliyor...")
+        print(f"   Önceki Safe Margin: {getattr(self.env, 'safe_margin', 'Bilinmiyor')}")
+        self.env.safe_margin = 45.0
+        print(f"   Yeni Safe Margin: {self.env.safe_margin}")
+        
+        # Environment'ı reset et ve başlangıç durumunu ayarla
+        obs, info = self.env.reset()
+        self.env.safe_margin = 30.0  # Reset'ten sonra tekrar ayarla
+        
+        # Cluster'ları tekrar set et (reset'te kaybolmuş olabilir)
+        cluster1 = {
+            'cx': 35.0,  # Yol üzerinde ama daha uzağa
+            'cy': 25.0,
+            'r': 3.0,    # Makul boyut
+            'risk': 0.4,  # Düşük risk
+            'id': 1
+        }
+        self.env.clusters = [cluster1]  # Tek cluster'ı tekrar set et
+        
+        print(f"🔄 Environment reset edildi")
+        print(f"   Yeni pozisyon: ({self.env.x:.1f}, {self.env.y:.1f})")
+        print(f"   Yeni hedef mesafesi: {self.env._goal_dist():.1f}")
+        print(f"   Güncel Safe Margin: {self.env.safe_margin}")
+        print(f"   Cluster sayısı: {len(self.env.clusters)}")
+        for i, cluster in enumerate(self.env.clusters):
+            print(f"   Cluster {i}: ({cluster['cx']:.1f}, {cluster['cy']:.1f}) - r: {cluster['r']:.1f}")
+        
+        # Başlangıç reward'ını 0 olarak ayarla
+        reward = 0.0
         
         print(f"🔧 Environment ayarları:")
         print(f"   Max Steps: {self.env.max_steps}")
         print(f"   Goal Radius: {self.env.goal_radius}")
         print(f"   Safe Margin: {self.env.safe_margin}")
+        
+        print(f"🧠 Model bilgileri:")
+        print(f"   Model tipi: {type(self.model)}")
+        print(f"   Model yüklendi mi: {self.model is not None}")
+        
+        print(f"🎯 Başlangıç durumu:")
+        print(f"   Pozisyon: ({self.env.x:.1f}, {self.env.y:.1f})")
+        print(f"   Hız: {self.env.speed:.1f}")
+        print(f"   Yön: {np.rad2deg(self.env.heading):.1f}°")
+        print(f"   Hedef mesafesi: {self.env._goal_dist():.1f}")
         
         while self.is_running and step_count < max_steps:
             start_step_time = time.time()
@@ -222,6 +282,17 @@ class MillisecondPrecisionSimulation:
             try:
                 # AI action'ı al
                 action, _ = self.model.predict(obs, deterministic=True)
+                
+                # Debug bilgileri
+                if step_count % 5 == 0:  # Her 5 adımda bir
+                    print(f"Adım {step_count}: Action={action}")
+                    print(f"   Pozisyon: ({self.env.x:.1f}, {self.env.y:.1f})")
+                    print(f"   Hız: {self.env.speed:.1f}")
+                    print(f"   Yön: {np.rad2deg(self.env.heading):.1f}°")
+                    print(f"   Hedef Mesafesi: {self.env._goal_dist():.1f}")
+                    print(f"   Reward: {reward:.3f}")
+                    print("   ---")
+                
                 obs, reward, terminated, truncated, info = self.env.step(action)
                 
                 total_reward += reward
@@ -234,7 +305,7 @@ class MillisecondPrecisionSimulation:
                 # Her adımda görselleştir (daha sık)
                 if step_count % 1 == 0:  # Her adımda görselleştir
                     self._visualize_millisecond_step(step_count, total_reward, info)
-                    plt.pause(1.0 / self.visualization_fps)  # 10 FPS
+                    plt.pause(0.5)  # 0.5 saniye bekle (daha yavaş)
                 
                 # Episode durumu kontrol et - Daha esnek
                 if terminated:
@@ -244,26 +315,44 @@ class MillisecondPrecisionSimulation:
                     print(f"   Success: {info.get('success', False)}")
                     print(f"   Final Goal Distance: {self.env._goal_dist():.1f}")
                     print(f"   Reason: {info.get('episode_type', 'unknown')}")
-                    # Terminated olsa bile devam et
-                    if step_count < 50:  # Çok erken terminate olursa devam et
+                    
+                    # Başarılı olursa simülasyonu durdur
+                    if info.get('success', False):
+                        print("   🎉 Hedefe ulaşıldı! Simülasyon başarıyla tamamlandı.")
+                        break
+                    
+                    # Terminated olsa bile devam et (sadece çarpışma durumunda)
+                    if info.get('episode_type') == 'collision':
+                        print("   ⚠️  Çarpışma tespit edildi, simülasyon durduruluyor.")
+                        break
+                    elif step_count < 100:  # Çok erken terminate olursa devam et
                         print("   ⚠️  Çok erken terminate, devam ediliyor...")
                         obs, info = self.env.reset()
                         continue
                     else:
-                        break
+                        print("   ⏰ Episode tamamlandı, simülasyon devam ediyor...")
+                        obs, info = self.env.reset()
+                        continue
                 
                 if truncated:
                     print(f"\n⏰ Episode Truncated!")
                     print(f"   Steps: {step_count}")
                     print(f"   Total Reward: {total_reward:.2f}")
                     print(f"   Final Goal Distance: {self.env._goal_dist():.1f}")
-                    # Truncated olsa bile devam et
-                    if step_count < 50:  # Çok erken truncate olursa devam et
+                    
+                    # Hedef mesafesini kontrol et
+                    goal_dist = self.env._goal_dist()
+                    if goal_dist < self.env.goal_radius * 1.2:  # %20 tolerans
+                        print(f"   🎯 Hedef yakınında ({goal_dist:.1f}m), başarılı sayılıyor!")
+                        break
+                    elif step_count < 100:  # Çok erken truncate olursa devam et
                         print("   ⚠️  Çok erken truncate, devam ediliyor...")
                         obs, info = self.env.reset()
                         continue
                     else:
-                        break
+                        print("   ⏰ Episode tamamlandı, simülasyon devam ediyor...")
+                        obs, info = self.env.reset()
+                        continue
                 
             except Exception as e:
                 print(f"❌ Adım {step_count} hatası: {e}")
@@ -304,20 +393,27 @@ class MillisecondPrecisionSimulation:
         print("\n🎉 Milisaniye hassasiyetinde simülasyon tamamlandı!")
     
     def _analyze_maneuvers(self):
-        """Manevra analizi ve geçmişi"""
+        """Manevra analizi ve geçmişi - Waypoint bazlı manevra planlama"""
         current_maneuvers = []
+        
+        # Waypoint'leri tahmin et
+        waypoints = self.env._predict_future_waypoints()
         
         for cluster in self.env.clusters:
             approach_time = self.calculate_cluster_approach_time(cluster)
             needs_maneuver = self.predict_maneuver_need(cluster)
             
-            if needs_maneuver:
+            # Waypoint bazlı ek manevra kontrolü
+            waypoint_risk = self._check_waypoint_cluster_intersection(waypoints, cluster)
+            
+            if needs_maneuver or waypoint_risk:
                 current_maneuvers.append({
                     'time': self.current_time,
                     'cluster_id': cluster['id'],
                     'approach_time': approach_time,
                     'distance': np.hypot(cluster['cx'] - self.env.x, cluster['cy'] - self.env.y),
-                    'position': (self.env.x, self.env.y)
+                    'position': (self.env.x, self.env.y),
+                    'waypoint_risk': waypoint_risk
                 })
         
         # Manevra geçmişini güncelle
@@ -334,6 +430,20 @@ class MillisecondPrecisionSimulation:
                 'safe_distance': cluster['r'] + self.env.safe_margin,
                 'position': (self.env.x, self.env.y)
             })
+    
+    def _check_waypoint_cluster_intersection(self, waypoints, cluster):
+        """Waypoint'lerin cluster ile kesişimini kontrol et"""
+        for i in range(0, len(waypoints), 2):
+            wp_x, wp_y = waypoints[i], waypoints[i+1]
+            
+            # Waypoint'in cluster'a olan mesafesi
+            d = np.hypot(cluster['cx'] - wp_x, cluster['cy'] - wp_y)
+            
+            # Eğer waypoint güvenlik mesafesi içindeyse risk var
+            if d < (cluster['r'] + self.env.safe_margin):
+                return True
+        
+        return False
     
     def _visualize_millisecond_step(self, step, total_reward, info):
         """Milisaniye hassasiyetinde görselleştirme"""
