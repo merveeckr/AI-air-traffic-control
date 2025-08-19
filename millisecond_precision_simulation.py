@@ -143,14 +143,15 @@ class MillisecondPrecisionSimulation:
     def create_cluster_scenario(self):
         """Cluster'ın arkasında hedef ile manevra senaryosu"""
         print("🎯 Cluster Arkasında Hedef + Manevra Senaryosu Oluşturuluyor...")
-        
-        # Environment'ı reset etme - zaten yukarıda reset ediliyor
-        # obs, info = self.env.reset()
-        
+
+        # Kontrollü senaryo için dinamik zorluğu kapat ve reset et
+        self.env.dynamic_difficulty = False
+        obs, info = self.env.reset()
+
         # Environment parametrelerini ayarla - Optimize edilmiş
         self.env.max_steps = 1000  # Uzun uçuş
         self.env.goal_radius = 25.0   # Büyük hedef (15.0'dan 25.0'a) - daha kolay başarı
-        self.env.safe_margin = 30.0  # Küçük güvenlik mesafesi (45.0'dan 30.0'a) - daha az dönüş
+        self.env.safe_margin = 45.0  # Küçük güvenlik mesafesi (45.0'dan 30.0'a) - daha az dönüş
         
         # TEK CLUSTER TEST - Basit senaryo
         self.env.clusters = []
@@ -183,8 +184,38 @@ class MillisecondPrecisionSimulation:
         print(f"   Hedef: ({self.env.goal[0]:.1f}, {self.env.goal[1]:.1f})")
         for cluster in self.env.clusters:
             print(f"   Küme {cluster['id']}: ({cluster['cx']:.1f}, {cluster['cy']:.1f}) - Risk: {cluster['risk']:.1f} - Yarıçap: {cluster['r']:.1f}")
-        
+
+        # Güncellenmiş state'i döndür
+        obs = self.env._get_obs()
+        info = {"scenario": "single_cluster"}
         return obs, info
+    
+    def create_two_cluster_scenario(self):
+        """İkili cluster senaryosu kur (iki manevrayı test etmek için)"""
+        # Ortam parametreleri
+        self.env.max_steps = 600
+        self.env.goal_radius = 40.0
+        self.env.safe_margin = 45.0
+        # Rastgele zorlukları kapat ve 2 cluster zorla
+        self.env.dynamic_difficulty = False
+        self.env.set_curriculum(curriculum_num_clusters=2, goal_radius=self.env.goal_radius, max_steps=self.env.max_steps, safe_margin=self.env.safe_margin)
+        # Reset ve kümeleri manuel yerleştir
+        self.env.reset()
+        self.env.clusters = [
+            {'cx': 30.0, 'cy': 20.0, 'r': 6.0, 'risk': 0.5, 'id': 1},
+            {'cx': 55.0, 'cy': 35.0, 'r': 6.0, 'risk': 0.5, 'id': 2},
+        ]
+        # Hedefi ikinci cluster’ın arkasına yerleştir
+        angle = np.pi/3
+        dist = 25.0
+        self.env.goal = np.array([
+            self.env.clusters[1]['cx'] + dist*np.cos(angle),
+            self.env.clusters[1]['cy'] + dist*np.sin(angle)
+        ])
+        print("✅ 2 Cluster senaryosu hazır:")
+        for c in self.env.clusters:
+            print(f"  Küme {c['id']}: ({c['cx']}, {c['cy']}) r={c['r']}")
+        print(f"  Hedef: ({self.env.goal[0]:.1f}, {self.env.goal[1]:.1f})")
     
     def calculate_cluster_approach_time(self, cluster):
         """Kümeye yaklaşma süresini hesapla"""
@@ -241,14 +272,18 @@ class MillisecondPrecisionSimulation:
         self.env.safe_margin = 30.0  # Reset'ten sonra tekrar ayarla
         
         # Cluster'ları tekrar set et (reset'te kaybolmuş olabilir)
-        cluster1 = {
-            'cx': 35.0,  # Yol üzerinde ama daha uzağa
-            'cy': 25.0,
-            'r': 3.0,    # Makul boyut
-            'risk': 0.4,  # Düşük risk
-            'id': 1
-        }
-        self.env.clusters = [cluster1]  # Tek cluster'ı tekrar set et
+        # İki cluster senaryosunu koru
+        self.env.clusters = [
+            {'cx': 30.0, 'cy': 20.0, 'r': 6.0, 'risk': 0.5, 'id': 1},
+            {'cx': 55.0, 'cy': 35.0, 'r': 6.0, 'risk': 0.5, 'id': 2},
+        ]
+        # Hedefi ikinci cluster'ın arkasına yerleştir
+        angle = np.pi/3
+        dist = 25.0
+        self.env.goal = np.array([
+            self.env.clusters[1]['cx'] + dist*np.cos(angle),
+            self.env.clusters[1]['cy'] + dist*np.sin(angle)
+        ])
         
         print(f"🔄 Environment reset edildi")
         print(f"   Yeni pozisyon: ({self.env.x:.1f}, {self.env.y:.1f})")
@@ -256,7 +291,8 @@ class MillisecondPrecisionSimulation:
         print(f"   Güncel Safe Margin: {self.env.safe_margin}")
         print(f"   Cluster sayısı: {len(self.env.clusters)}")
         for i, cluster in enumerate(self.env.clusters):
-            print(f"   Cluster {i}: ({cluster['cx']:.1f}, {cluster['cy']:.1f}) - r: {cluster['r']:.1f}")
+            print(f"   Cluster {cluster['id']}: ({cluster['cx']:.1f}, {cluster['cy']:.1f}) - r: {cluster['r']:.1f} - Risk: {cluster['risk']:.1f}")
+        print(f"   Hedef: ({self.env.goal[0]:.1f}, {self.env.goal[1]:.1f})")
         
         # Başlangıç reward'ını 0 olarak ayarla
         reward = 0.0
@@ -540,8 +576,8 @@ class MillisecondPrecisionSimulation:
         if hasattr(self.env, '_detect_cluster_obstacles'):
             obstacles = self.env._detect_cluster_obstacles()
             for obstacle in obstacles:
-                # Engel yolunu kırmızı çizgi ile göster
-                self.ax.plot([0, self.env.goal[0]], [0, self.env.goal[1]], 
+                # Engel yolunu kırmızı çizgi ile göster (mevcut pozisyondan hedefe)
+                self.ax.plot([self.env.x, self.env.goal[0]], [self.env.y, self.env.goal[1]], 
                            'red', linestyle=':', linewidth=3, alpha=0.4, label='Engel Yolu')
                 break  # Sadece bir kez çiz
         
@@ -629,6 +665,12 @@ def main():
     
     # Simülasyon başlat
     sim = MillisecondPrecisionSimulation()
+    
+    # İkili cluster senaryosunu zorla (iki manevra testi)
+    try:
+        sim.create_two_cluster_scenario()
+    except Exception as e:
+        print(f"⚠️  2 cluster senaryosu kurulamadı: {e}")
     
     try:
         # Simülasyonu çalıştır

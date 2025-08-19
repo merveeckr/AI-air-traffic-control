@@ -29,7 +29,10 @@ class ProactiveNavigationEnv(gym.Env):
         self.curriculum_num_clusters = 0
         self.success_count = 0
         self.dynamic_difficulty = True
+        # Observation mode: 'v1' => 30-dim (backward compatible), 'v2' => 36-dim (extra cluster-relative features)
+        self.obs_mode = 'v1'
 
+        # Backward-compatible observation shape (30)
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(30,), dtype=np.float32)
         self.action_space = gym.spaces.Box(low=np.array([-1.0, -1.0]), high=np.array([1.0, 1.0]), dtype=np.float32)
 
@@ -147,7 +150,8 @@ class ProactiveNavigationEnv(gym.Env):
 
     def _detect_cluster_obstacles(self):
         obstacles = []
-        start_x, start_y = 0.0, 0.0
+        # Use current aircraft position to evaluate line-of-sight to goal
+        start_x, start_y = self.x, self.y
         goal_x, goal_y = self.goal[0], self.goal[1]
         if abs(goal_x - start_x) > 1e-6:
             m = (goal_y - start_y) / (goal_x - start_x)
@@ -167,17 +171,41 @@ class ProactiveNavigationEnv(gym.Env):
 
     def _calculate_safe_maneuver(self, cluster: dict):
         cx, cy, radius = cluster['cx'], cluster['cy'], cluster['r']
-        target_angle = np.arctan2(self.goal[1] - self.y, self.goal[0] - self.x)
-        cluster_angle = np.arctan2(cy - self.y, cx - self.x)
-        angle_diff = target_angle - cluster_angle
-        while angle_diff > np.pi: angle_diff -= 2 * np.pi
-        while angle_diff < -np.pi: angle_diff += 2 * np.pi
-        side = 'right' if angle_diff > 0 else 'left'
-        safe_dist = radius + self.safe_margin + 10
-        if side == 'right':
-            return cx + safe_dist, cy + safe_dist
-        else:
-            return cx - safe_dist, cy - safe_dist
+        safe_dist = radius + self.safe_margin + 20.0
+        # Candidate waypoints around the obstacle (diagonal offsets)
+        candidates = [
+            (cx + safe_dist, cy + safe_dist),
+            (cx - safe_dist, cy - safe_dist),
+            (cx + safe_dist, cy - safe_dist),
+            (cx - safe_dist, cy + safe_dist),
+        ]
+
+        def clearance_to_clusters(px: float, py: float) -> float:
+            if not self.clusters:
+                return float('inf')
+            min_margin = float('inf')
+            for c in self.clusters:
+                d_edge = np.hypot(c['cx'] - px, c['cy'] - py) - (c['r'] + self.safe_margin)
+                if d_edge < min_margin:
+                    min_margin = d_edge
+            return min_margin
+
+        def score_candidate(pt):
+            px, py = pt
+            # Prefer larger clearance; break ties by proximity to goal
+            clear = clearance_to_clusters(px, py)
+            dist_to_goal = -np.hypot(self.goal[0] - px, self.goal[1] - py)
+            return (clear, dist_to_goal)
+
+        # Keep inside world bounds
+        bounded = []
+        for px, py in candidates:
+            bx = np.clip(px, self.world_bounds['x_min'] + 5, self.world_bounds['x_max'] - 5)
+            by = np.clip(py, self.world_bounds['y_min'] + 5, self.world_bounds['y_max'] - 5)
+            bounded.append((bx, by))
+
+        best = max(bounded, key=score_candidate)
+        return best
 
     def _is_maneuver_needed(self):
         return len(self._detect_cluster_obstacles()) > 0
@@ -207,6 +235,19 @@ class ProactiveNavigationEnv(gym.Env):
             self.safe_margin = float(safe_margin)
         return True
 
+    def set_observation_mode(self, mode: str = 'v1'):
+        """Set observation mode. Must be called before training/env vectorization.
+        'v1' => 30-dim, 'v2' => 36-dim (adds per-cluster dist/bearing for top-3 clusters).
+        """
+        assert mode in ('v1', 'v2'), "mode must be 'v1' or 'v2'"
+        self.obs_mode = mode
+        # Update observation_space only if switching before rollout starts
+        if mode == 'v1':
+            self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(30,), dtype=np.float32)
+        else:
+            self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(36,), dtype=np.float32)
+        return True
+
     def _calculate_reward(self):
         goal_dist = self._goal_dist()
         # Time cost
@@ -227,10 +268,9 @@ class ProactiveNavigationEnv(gym.Env):
         r_heading = 4.0 * np.cos(bearing_err)
         # Close-goal shaping
         r_close_goal = 100.0 if goal_dist < (self.goal_radius * 2.5) else 0.0
-        # User-suggested components
-        # Distance-to-goal small shaping (always pulling in)
+        # User-specified distance-to-goal shaping (small pull-in)
         r_dist_goal = -0.1 * goal_dist
-        # Proactive: reuse waypoint risk
+        # Proactive via waypoint risk
         wps = self._predict_future_waypoints()
         wp_risk, wp_cnt = self._assess_waypoint_risk(wps)
         r_proactive = -wp_risk * 15.0 if wp_cnt > 0 else 60.0
@@ -246,7 +286,7 @@ class ProactiveNavigationEnv(gym.Env):
             d = np.hypot(c['cx'] - self.x, c['cy'] - self.y)
             safe = c['r'] + self.safe_margin
             if d < safe:
-                r_clear += -200.0 - 20.0 * (safe - d)
+                r_clear += -200.0 - 30.0 * (safe - d)
             elif d < safe + 10.0:
                 r_clear += -(safe + 10.0 - d) * 3.0
         # Path clear bonus
@@ -257,9 +297,9 @@ class ProactiveNavigationEnv(gym.Env):
         else:
             mx, my = self._get_maneuver_target()
             md = np.hypot(mx - self.x, my - self.y)
-            r_subgoal = 200.0 if md < 12.0 else 0.0
-        # Terminal terms (collision handled in step early)
-        r_goal = 10000.0 if goal_dist < self.goal_radius else 0.0
+            r_subgoal = 120.0 if md < 12.0 else 0.0
+        # Terminal terms
+        r_goal = 15000.0 if goal_dist < self.goal_radius else 0.0
         r_collision = -1000.0 if self._in_collision() else 0.0
         r_bounds = -500.0 if self._out_of_bounds() else 0.0
         return (r_time + r_progress + r_heading + r_close_goal + r_dist_goal +
@@ -269,20 +309,38 @@ class ProactiveNavigationEnv(gym.Env):
     def _get_obs(self):
         current_state = [self.x, self.y, self.speed, self.heading]
         predicted_waypoints = self._predict_future_waypoints()
+        # Top 3 clusters raw
         cluster_info = []
         top_clusters = sorted(self.clusters, key=lambda c: np.hypot(c['cx'] - self.x, c['cy'] - self.y))[:3]
         for cluster in top_clusters:
             cluster_info.extend([cluster['cx'], cluster['cy'], cluster['r'], cluster['risk']])
         while len(cluster_info) < 12:
             cluster_info.extend([1000.0, 1000.0, 0.0, 0.0])
+        # Goal info
         goal_info = [self.goal[0], self.goal[1], self._goal_dist(), self._goal_bearing()]
-        maneuver_info = []
+        # Maneuver info
         if self._is_maneuver_needed():
             target = self._get_maneuver_target()
             maneuver_info = [1.0, target[0], target[1], float(len(self._detect_cluster_obstacles()))]
         else:
             maneuver_info = [0.0, self.goal[0], self.goal[1], 0.0]
-        return np.array(current_state + list(predicted_waypoints) + cluster_info + goal_info + maneuver_info, dtype=np.float32)
+        if self.obs_mode == 'v2':
+            # Cluster relative features (distance, bearing) for same top 3
+            rel_features = []
+            for cluster in top_clusters:
+                dx, dy = cluster['cx'] - self.x, cluster['cy'] - self.y
+                dist = float(np.hypot(dx, dy))
+                bearing = float(np.arctan2(dy, dx) - self.heading)
+                while bearing > np.pi: bearing -= 2*np.pi
+                while bearing < -np.pi: bearing += 2*np.pi
+                rel_features.extend([dist, bearing])
+            while len(rel_features) < 6:
+                rel_features.extend([1000.0, 0.0])
+            obs_list = current_state + list(predicted_waypoints) + cluster_info + goal_info + maneuver_info + rel_features
+        else:
+            # v1: 30-dim without extra cluster-relative features
+            obs_list = current_state + list(predicted_waypoints) + cluster_info + goal_info + maneuver_info
+        return np.array(obs_list, dtype=np.float32)
 
     def _goal_dist(self): return np.hypot(self.goal[0] - self.x, self.goal[1] - self.y)
     def _goal_bearing(self): 
