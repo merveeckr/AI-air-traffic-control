@@ -16,8 +16,8 @@ from stable_baselines3 import PPO
 from proactive_navigation_env import ProactiveNavigationEnv
 
 
-FINE_TUNE_STEPS = 100_000  # Gerekirse 50_000–200_000 arası ayarlayın
-SAFE_MARGIN = 45.0         # İnferansla uyumlu olsun
+FINE_TUNE_STEPS = 100_000  
+SAFE_MARGIN = 45.0         
 NUM_CLUSTERS = 2
 GOAL_RADIUS = 40.0
 MAX_STEPS = 600

@@ -14,7 +14,7 @@ from typing import Tuple, Dict, Any, Optional
 class ProactiveNavigationEnv(gym.Env):
     """Proaktif navigasyon ortamı - Waypoint tahmini + manevra planlama"""
     
-    def __init__(self, prediction_horizon=3.0, dt=0.1, max_steps=500, render_mode=None):
+    def __init__(self, prediction_horizon=3.0, dt=0.1, max_steps=1000, render_mode=None):  # Daha fazla adım
         super().__init__()
         self.prediction_horizon = prediction_horizon
         self.dt = dt
@@ -23,7 +23,7 @@ class ProactiveNavigationEnv(gym.Env):
         self.max_speed = 20.0
         self.min_speed = 10.0
         self.safe_margin = 35.0
-        self.goal_radius = 40.0
+        self.goal_radius = 15.0  # Daha küçük hedef yarıçapı - daha yakına gelmeli
         self.world_bounds = {'x_min': -100, 'x_max': 200, 'y_min': -100, 'y_max': 200}
         # Curriculum + dynamic difficulty
         self.curriculum_num_clusters = 0
@@ -31,6 +31,13 @@ class ProactiveNavigationEnv(gym.Env):
         self.dynamic_difficulty = True
         # Observation mode: 'v1' => 30-dim (backward compatible), 'v2' => 36-dim (extra cluster-relative features)
         self.obs_mode = 'v1'
+        # Success policy knobs
+        self.allow_los_success = False  # False: Erken başarıyı devre dışı bırak - daha yakına gelmeli
+        self.allow_timeout_near_goal_success = True  # if True, allow success on time-limit when near goal
+        # Training knobs (set by trainer when needed)
+        self.training_mode = False
+        self.initial_random_steps = 0
+        self.observation_noise_std = 0.0
 
         # Backward-compatible observation shape (30)
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(30,), dtype=np.float32)
@@ -72,6 +79,9 @@ class ProactiveNavigationEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action: np.ndarray):
+        # Early random actions for exploration when training
+        if self.training_mode and self.steps < int(self.initial_random_steps):
+            action = self.action_space.sample()
         self.steps += 1
         self.time += self.dt
         turn_cmd = float(action[0]) * self.max_turn_rate
@@ -87,31 +97,41 @@ class ProactiveNavigationEnv(gym.Env):
         reward = self._calculate_reward()
         terminated = truncated = False
         success = False
+        episode_type = 'running'
         # Early success
         gd = self._goal_dist()
         if gd < self.goal_radius:
             terminated = True
             success = True
+            episode_type = 'goal'
         elif self._in_collision() or self._out_of_bounds():
             terminated = True
             success = False
+            episode_type = 'collision' if self._in_collision() else 'out_of_bounds'
         # LOS success: yol temiz ve hedef yakınsa başarı say
-        elif (not self._detect_cluster_obstacles()) and gd < (self.goal_radius * 1.8):
+        elif self.allow_los_success and (not self._detect_cluster_obstacles()) and gd < (self.goal_radius * 1.8):
             terminated = True
             success = True
+            episode_type = 'los_success'
         # Stuck detection: no meaningful improvement for patience steps
         if gd < self.best_goal_dist - 0.5:
             self.best_goal_dist = gd
             self.last_improve_step = self.steps
-        elif (self.steps - self.last_improve_step) > 90 and not terminated:
-            # penalize and truncate to encourage learning shorter, purposeful paths
-            reward -= 500.0
-            truncated = True
+        else:
+            # Patience increases near goal to avoid premature truncate
+            patience = 200  # Daha fazla sabır - erken kesmeyi önle
+            if gd < (self.goal_radius * 3.0):
+                patience = 400  # Hedef yakınında daha da fazla sabır
+            if (self.steps - self.last_improve_step) > patience and not terminated:
+                # penalize and truncate to encourage learning shorter, purposeful paths
+                reward -= 500.0
+                truncated = True
         # Time limit
         if self.steps >= self.max_steps and not (terminated or truncated):
             truncated = True
-            if gd < self.goal_radius * 1.5:
+            if self.allow_timeout_near_goal_success and gd < self.goal_radius * 1.5:
                 success = True
+                episode_type = 'timeout_near_goal'
         self.episode_rewards.append(reward)
         if terminated and success:
             self.success_count += 1
@@ -123,7 +143,7 @@ class ProactiveNavigationEnv(gym.Env):
             'total_reward': sum(self.episode_rewards),
             'time': self.time,
             'success': success,
-            'episode_type': 'success' if success else ('collision' if self._in_collision() else 'timeout')
+            'episode_type': episode_type if (terminated or truncated) else 'running'
         }
         return obs, reward, terminated, truncated, info
 
@@ -150,9 +170,29 @@ class ProactiveNavigationEnv(gym.Env):
 
     def _detect_cluster_obstacles(self):
         obstacles = []
-        # Use current aircraft position to evaluate line-of-sight to goal
+        # Use current aircraft position to evaluate line-of-sight to goal (segment, not infinite line)
         start_x, start_y = self.x, self.y
         goal_x, goal_y = self.goal[0], self.goal[1]
+        vx, vy = (goal_x - start_x), (goal_y - start_y)
+        L2 = vx*vx + vy*vy
+        if L2 < 1e-9:
+            return obstacles
+        for cluster in self.clusters:
+            # Project cluster center onto segment to check the closest point along the path
+            t = ((cluster['cx'] - start_x) * vx + (cluster['cy'] - start_y) * vy) / L2
+            if t < 0.0:
+                continue  # behind the aircraft; ignore
+            if t > 1.0:
+                t = 1.0
+            px = start_x + t * vx
+            py = start_y + t * vy
+            distance_to_path = np.hypot(cluster['cx'] - px, cluster['cy'] - py)
+            if distance_to_path < (cluster['r'] + self.safe_margin):
+                obstacles.append(cluster)
+        return obstacles
+
+    def _detect_obstacles_between(self, start_x: float, start_y: float, goal_x: float, goal_y: float):
+        obstacles = []
         if abs(goal_x - start_x) > 1e-6:
             m = (goal_y - start_y) / (goal_x - start_x)
             b = start_y - m * start_x
@@ -171,40 +211,54 @@ class ProactiveNavigationEnv(gym.Env):
 
     def _calculate_safe_maneuver(self, cluster: dict):
         cx, cy, radius = cluster['cx'], cluster['cy'], cluster['r']
-        safe_dist = radius + self.safe_margin + 20.0
-        # Candidate waypoints around the obstacle (diagonal offsets)
-        candidates = [
-            (cx + safe_dist, cy + safe_dist),
-            (cx - safe_dist, cy - safe_dist),
-            (cx + safe_dist, cy - safe_dist),
-            (cx - safe_dist, cy + safe_dist),
-        ]
+        # Define LOS vector and its normal from current position to goal
+        vx, vy = (self.goal[0] - self.x), (self.goal[1] - self.y)
+        L = np.hypot(vx, vy)
+        if L < 1e-6:
+            vx, vy, L = 1.0, 0.0, 1.0
+        nx, ny = -vy / L, vx / L
+        tx, ty = vx / L, vy / L
+
+        base_offset = radius + self.safe_margin + 12.0
 
         def clearance_to_clusters(px: float, py: float) -> float:
             if not self.clusters:
                 return float('inf')
-            min_margin = float('inf')
+            m = float('inf')
             for c in self.clusters:
                 d_edge = np.hypot(c['cx'] - px, c['cy'] - py) - (c['r'] + self.safe_margin)
-                if d_edge < min_margin:
-                    min_margin = d_edge
-            return min_margin
+                if d_edge < m:
+                    m = d_edge
+            return m
+
+        def path_is_clear(px: float, py: float) -> bool:
+            return len(self._detect_obstacles_between(self.x, self.y, px, py)) == 0
+
+        candidates = []
+        for side in (+1.0, -1.0):
+            for k in (1.0, 1.4):
+                px = cx + side * nx * (base_offset * k) + tx * (radius + 6.0)
+                py = cy + side * ny * (base_offset * k) + ty * (radius + 6.0)
+                bx = np.clip(px, self.world_bounds['x_min'] + 5, self.world_bounds['x_max'] - 5)
+                by = np.clip(py, self.world_bounds['y_min'] + 5, self.world_bounds['y_max'] - 5)
+                candidates.append((bx, by))
 
         def score_candidate(pt):
             px, py = pt
-            # Prefer larger clearance; break ties by proximity to goal
+            clear_path = path_is_clear(px, py)
             clear = clearance_to_clusters(px, py)
             dist_to_goal = -np.hypot(self.goal[0] - px, self.goal[1] - py)
-            return (clear, dist_to_goal)
+            return (1 if clear_path else 0, clear, dist_to_goal)
 
-        # Keep inside world bounds
-        bounded = []
-        for px, py in candidates:
-            bx = np.clip(px, self.world_bounds['x_min'] + 5, self.world_bounds['x_max'] - 5)
-            by = np.clip(py, self.world_bounds['y_min'] + 5, self.world_bounds['y_max'] - 5)
-            bounded.append((bx, by))
-
-        best = max(bounded, key=score_candidate)
+        best = max(candidates, key=score_candidate)
+        if score_candidate(best)[0] == 0:
+            # If none has a clear leg, push further out along the normal direction
+            more_px = cx + nx * (base_offset * 1.8) + tx * (radius + 10.0)
+            more_py = cy + ny * (base_offset * 1.8) + ty * (radius + 10.0)
+            best = (
+                np.clip(more_px, self.world_bounds['x_min'] + 5, self.world_bounds['x_max'] - 5),
+                np.clip(more_py, self.world_bounds['y_min'] + 5, self.world_bounds['y_max'] - 5),
+            )
         return best
 
     def _is_maneuver_needed(self):
@@ -214,8 +268,19 @@ class ProactiveNavigationEnv(gym.Env):
         obstacles = self._detect_cluster_obstacles()
         if not obstacles:
             return self.goal[0], self.goal[1]
-        closest_obstacle = min(obstacles, key=lambda c: np.hypot(c['cx'] - self.x, c['cy'] - self.y))
-        return self._calculate_safe_maneuver(closest_obstacle)
+        # Choose the obstacle earliest along the current LOS
+        vx, vy = (self.goal[0] - self.x), (self.goal[1] - self.y)
+        L = max(np.hypot(vx, vy), 1e-6)
+        def along_distance(c):
+            return ((c['cx'] - self.x) * vx + (c['cy'] - self.y) * vy) / L
+        primary = min(obstacles, key=lambda c: max(along_distance(c), 0.0))
+        target = self._calculate_safe_maneuver(primary)
+        # Validate leg to target; if blocked and there is another obstacle, try that
+        if len(self._detect_obstacles_between(self.x, self.y, target[0], target[1])) > 0 and len(obstacles) > 1:
+            remaining = [o for o in obstacles if o is not primary]
+            secondary = min(remaining, key=lambda c: max(along_distance(c), 0.0))
+            target = self._calculate_safe_maneuver(secondary)
+        return target
 
     # Active target for shaping: maneuver target if needed, otherwise goal
     def _active_target(self):
@@ -269,7 +334,7 @@ class ProactiveNavigationEnv(gym.Env):
         # Close-goal shaping
         r_close_goal = 100.0 if goal_dist < (self.goal_radius * 2.5) else 0.0
         # User-specified distance-to-goal shaping (small pull-in)
-        r_dist_goal = -0.1 * goal_dist
+        r_dist_goal = -0.2 * goal_dist
         # Proactive via waypoint risk
         wps = self._predict_future_waypoints()
         wp_risk, wp_cnt = self._assess_waypoint_risk(wps)
@@ -289,6 +354,14 @@ class ProactiveNavigationEnv(gym.Env):
                 r_clear += -200.0 - 30.0 * (safe - d)
             elif d < safe + 10.0:
                 r_clear += -(safe + 10.0 - d) * 3.0
+        # Risk-shaped penalty (distance-weighted when inside safe zone)
+        total_risk_penalty = 0.0
+        for c in self.clusters:
+            d = np.hypot(c['cx'] - self.x, c['cy'] - self.y)
+            safe = c['r'] + self.safe_margin
+            if d < safe:
+                total_risk_penalty += (1.0 / max(d, 1e-2)) * (1.0 + c.get('risk', 0.5))
+        r_risk = -15.0 * total_risk_penalty
         # Path clear bonus
         r_path_clear = 80.0 if not self._detect_cluster_obstacles() else 0.0
         # Subgoal proximity bonus
@@ -297,17 +370,29 @@ class ProactiveNavigationEnv(gym.Env):
         else:
             mx, my = self._get_maneuver_target()
             md = np.hypot(mx - self.x, my - self.y)
-            r_subgoal = 120.0 if md < 12.0 else 0.0
+            r_subgoal = 60.0 if md < 12.0 else 0.0
         # Terminal terms
         r_goal = 15000.0 if goal_dist < self.goal_radius else 0.0
         r_collision = -1000.0 if self._in_collision() else 0.0
         r_bounds = -500.0 if self._out_of_bounds() else 0.0
         return (r_time + r_progress + r_heading + r_close_goal + r_dist_goal +
-                r_proactive + r_safe_zone + r_clear + r_path_clear + r_subgoal +
+                r_proactive + r_safe_zone + r_clear + r_risk + r_path_clear + r_subgoal +
                 r_goal + r_collision + r_bounds)
 
     def _get_obs(self):
-        current_state = [self.x, self.y, self.speed, self.heading]
+        # Optional observation noise for robustness during training
+        if self.training_mode and self.observation_noise_std > 0.0:
+            noise_xy = np.random.normal(0.0, self.observation_noise_std, size=2)
+            obs_x = float(self.x + noise_xy[0])
+            obs_y = float(self.y + noise_xy[1])
+            noise_goal = np.random.normal(0.0, self.observation_noise_std, size=2)
+            goal_x_noisy = float(self.goal[0] + noise_goal[0])
+            goal_y_noisy = float(self.goal[1] + noise_goal[1])
+        else:
+            obs_x, obs_y = float(self.x), float(self.y)
+            goal_x_noisy, goal_y_noisy = float(self.goal[0]), float(self.goal[1])
+
+        current_state = [obs_x, obs_y, self.speed, self.heading]
         predicted_waypoints = self._predict_future_waypoints()
         # Top 3 clusters raw
         cluster_info = []
@@ -317,7 +402,7 @@ class ProactiveNavigationEnv(gym.Env):
         while len(cluster_info) < 12:
             cluster_info.extend([1000.0, 1000.0, 0.0, 0.0])
         # Goal info
-        goal_info = [self.goal[0], self.goal[1], self._goal_dist(), self._goal_bearing()]
+        goal_info = [goal_x_noisy, goal_y_noisy, self._goal_dist(), self._goal_bearing()]
         # Maneuver info
         if self._is_maneuver_needed():
             target = self._get_maneuver_target()
@@ -341,6 +426,16 @@ class ProactiveNavigationEnv(gym.Env):
             # v1: 30-dim without extra cluster-relative features
             obs_list = current_state + list(predicted_waypoints) + cluster_info + goal_info + maneuver_info
         return np.array(obs_list, dtype=np.float32)
+
+    # ----- Training helpers -----
+    def set_training_mode(self, enable: bool = True, initial_random_steps: int = 0):
+        self.training_mode = bool(enable)
+        self.initial_random_steps = int(max(0, initial_random_steps))
+        return True
+
+    def set_observation_noise(self, std: float = 0.0):
+        self.observation_noise_std = float(max(0.0, std))
+        return True
 
     def _goal_dist(self): return np.hypot(self.goal[0] - self.x, self.goal[1] - self.y)
     def _goal_bearing(self): 
@@ -378,8 +473,18 @@ class ProactiveNavigationEnv(gym.Env):
             self.ax.add_patch(Circle((cluster['cx'], cluster['cy']), cluster['r'], color='red', alpha=0.3))
             self.ax.add_patch(Circle((cluster['cx'], cluster['cy']), cluster['r']+self.safe_margin, color='orange', alpha=0.1))
         waypoints = self._predict_future_waypoints()
+        # Waypoint'ler arasında çizgi çek
+        if len(waypoints) >= 4:
+            wp_x = [waypoints[i] for i in range(0, len(waypoints), 2)]
+            wp_y = [waypoints[i+1] for i in range(0, len(waypoints), 2)]
+            self.ax.plot(wp_x, wp_y, 'r--', alpha=0.4, linewidth=2)  # Kırmızı kesikli çizgi
+        
         for i in range(0,len(waypoints),2):
-            self.ax.scatter(waypoints[i], waypoints[i+1], c='purple', s=100, marker='s')
+            # Farklı zamanlardaki waypoint'ler için farklı boyutlar
+            time_factor = (i // 2 + 1) * 0.5
+            size = int(80 + time_factor * 40)
+            alpha = 0.6 + time_factor * 0.2
+            self.ax.scatter(waypoints[i], waypoints[i+1], c='red', s=size, marker='o', alpha=alpha, edgecolors='darkred', linewidth=1)
         self.ax.scatter(self.goal[0], self.goal[1], c='green', s=200, marker='*')
         self.ax.scatter(self.x, self.y, c='blue', s=150, marker='^')
         arrow_len = 15

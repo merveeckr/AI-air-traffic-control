@@ -259,7 +259,7 @@ class MillisecondPrecisionSimulation:
         # Environment'ı manuel olarak kontrol et
         self.env.max_steps = max_steps  # Maksimum adım sayısını artır
         self.env.goal_radius = 25.0     # Hedef yarıçapını büyüt (15.0'dan 25.0'a) - daha kolay başarı
-        self.env.safe_margin = 30.0     # Güvenlik mesafesini küçült (45.0'dan 30.0'a) - daha az dönüş
+        self.env.safe_margin = 45.0     # Daha geniş güvenlik tamponu
         
         # Environment parametrelerini doğrudan override et
         print(f"🔧 Environment parametreleri override ediliyor...")
@@ -269,7 +269,7 @@ class MillisecondPrecisionSimulation:
         
         # Environment'ı reset et ve başlangıç durumunu ayarla
         obs, info = self.env.reset()
-        self.env.safe_margin = 30.0  # Reset'ten sonra tekrar ayarla
+        self.env.safe_margin = 45.0  # Reset'ten sonra sabit tut
         
         # Cluster'ları tekrar set et (reset'te kaybolmuş olabilir)
         # İki cluster senaryosunu koru
@@ -318,6 +318,24 @@ class MillisecondPrecisionSimulation:
             try:
                 # AI action'ı al
                 action, _ = self.model.predict(obs, deterministic=True)
+
+                # Manevra asistanı: Engel varsa daha kararlı dönüş uygula
+                try:
+                    if hasattr(self.env, '_is_maneuver_needed') and self.env._is_maneuver_needed():
+                        mx, my = self.env._get_maneuver_target()
+                        desired = np.arctan2(my - self.env.y, mx - self.env.x)
+                        bearing_err = desired - self.env.heading
+                        while bearing_err > np.pi: bearing_err -= 2*np.pi
+                        while bearing_err < -np.pi: bearing_err += 2*np.pi
+                        max_delta = self.env.max_turn_rate * self.env.dt
+                        # 1.5x agresif dönüş
+                        turn_norm = float(np.clip(1.5 * (bearing_err / max_delta), -1.0, 1.0))
+                        if isinstance(action, np.ndarray) and action.shape[0] >= 2:
+                            action[0] = turn_norm
+                            # dönüşte yavaşla
+                            action[1] = min(float(action[1]), -0.3)
+                except Exception:
+                    pass
                 
                 # Debug bilgileri
                 if step_count % 5 == 0:  # Her 5 adımda bir
@@ -351,6 +369,24 @@ class MillisecondPrecisionSimulation:
                     print(f"   Success: {info.get('success', False)}")
                     print(f"   Final Goal Distance: {self.env._goal_dist():.1f}")
                     print(f"   Reason: {info.get('episode_type', 'unknown')}")
+
+                    # Eğer LOS-success ise ve hedef yarıçapı içinde değilsek, episode'u başarı sayma
+                    if info.get('episode_type') == 'los_success' and self.env._goal_dist() >= self.env.goal_radius:
+                        print("   ℹ️ LOS-success tetiklendi ama hedef yarıçapı içinde değiliz; devam ediliyor...")
+                        terminated = False
+                        continue
+                    # Eğer timeout near goal ise ve mesafe çok düşükse, kısa bir ek pencere ver
+                    if info.get('episode_type') == 'timeout_near_goal' and self.env._goal_dist() > self.env.goal_radius:
+                        print("   ⏳ Hedefe çok yakın zaman aşımı; 80 ek adım veriliyor...")
+                        extra_steps = 80
+                        for _ in range(extra_steps):
+                            action, _ = self.model.predict(obs, deterministic=True)
+                            obs, reward, terminated2, truncated2, info2 = self.env.step(action)
+                            total_reward += reward
+                            step_count += 1
+                            if terminated2 or truncated2:
+                                break
+                        continue
                     
                     # Başarılı olursa simülasyonu durdur
                     if info.get('success', False):
