@@ -1,9 +1,6 @@
 
-# 🚁 Proaktif Navigasyon Projesi
 
-Bu proje, yapay zeka destekli otonom navigasyon için geliştirilmiş bir simülasyon ortamıdır. Uçak/tekne gibi araçların engelleri önceden tahmin ederek kaçınmasını ve hedeflere güvenli şekilde ulaşmasını sağlar.
-
-## 🌟 Özellikler
+##  Özellikler
 
 - **Proaktif Risk Kaçınma**: 3 saniye önceden waypoint tahmini
 - **Dinamik Zorluk**: Başarıya göre artan zorluk seviyesi
@@ -11,10 +8,10 @@ Bu proje, yapay zeka destekli otonom navigasyon için geliştirilmiş bir simül
 - **PPO Reinforcement Learning**: Stable-Baselines3 ile eğitim
 - **Çoklu Senaryo Testi**: Farklı engel konfigürasyonları
 
-## 📁 Proje Yapısı
+##  Proje Yapısı
 
 ```
-Yeni klasör (2) - Kopya/
+Yeni klasör/
 ├── proactive_navigation_env.py      # Ana simülasyon ortamı
 ├── scenario_sweep.py                # Senaryo test ve görselleştirme
 ├── proactive_training.py            # Model eğitim sınıfı
@@ -29,7 +26,7 @@ Yeni klasör (2) - Kopya/
 └── README.md                        # Bu dosya
 ```
 
-## 🚀 Hızlı Başlangıç
+##  Hızlı Başlangıç
 
 ### Gereksinimler
 
@@ -47,7 +44,7 @@ python scenario_sweep.py --render --clusters 3 --safe 40 --goalR 6 --seed 2 --as
 python scenario_sweep.py ".\data\proactive_navigation_training_20250820_141111\final_model.zip" --render --clusters 3 --safe 40 --goalR 6 --seed 2 --assist
 ```
 
-## 🎯 Scenario Sweep Kullanımı
+## Scenario Sweep Kullanımı
 
 `scenario_sweep.py` dosyası, eğitilmiş modelleri test etmek ve farklı senaryolarda performansını değerlendirmek için kullanılır.
 
@@ -75,7 +72,7 @@ python scenario_sweep.py --render --clusters 3 --safe 35 --goalR 1 --assist
 python scenario_sweep.py --render --clusters 2 --safe 40 --goalR 0.5 --assist
 ```
 
-## 🧠 Model Eğitimi
+## Model Eğitimi
 
 ### Yeni Model Eğitimi
 
@@ -126,7 +123,7 @@ Environment 30 boyutlu gözlem vektörü üretir:
 - **Turn Command**: [-1, 1] → [-45°, +45°] dönüş
 - **Speed Command**: [-1, 1] → [-2, +2] hız değişimi
 
-## 📊 Performans Metrikleri
+## Performans Metrikleri
 
 ### Başarı Kriterleri
 
@@ -167,7 +164,7 @@ Environment 30 boyutlu gözlem vektörü üretir:
 python scenario_sweep.py --render --clusters 2 --safe 40 --goalR 1 --seed 0
 ```
 
-## 📈 En Son Eğitilen Model
+## En Son Eğitilen Model
 
 ### Model Bilgileri
 
@@ -186,7 +183,7 @@ python scenario_sweep.py --render --clusters 2 --safe 40 --goalR 1 --seed 0
 | 2 Engel | 88% | 5% | 140 adım |
 | 3 Engel | 82% | 8% | 160 adım |
 
-## 🚀 Gelişmiş Özellikler
+## Gelişmiş Özellikler
 
 ### Manevra Yardımı
 
